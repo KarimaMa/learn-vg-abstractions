@@ -1,0 +1,1011 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Mini Vector UI (SVG.js + Interact.js)</title>
+
+  <!-- SVG.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@svgdotjs/svg.js@3.2.0/dist/svg.min.js"></script>
+  <!-- Interact.js -->
+  <script src="https://cdn.jsdelivr.net/npm/interactjs/dist/interact.min.js"></script>
+
+  <style>
+    :root {
+      --bg: #0b0f17;
+      --panel: #101827;
+      --ink: #e6eefc;
+      --muted: #91a4c7;
+      --accent: #5aa7ff;
+      --handle: #ffd166;
+      --danger: #ff5a7a;
+    }
+
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    header {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      padding: 10px 12px;
+      background: var(--panel);
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .btn {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.10);
+      color: var(--ink);
+      padding: 8px 10px;
+      border-radius: 10px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .btn.active {
+      outline: 2px solid rgba(90,167,255,0.7);
+    }
+
+    .hint {
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    #stage {
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* SVG fills the stage */
+    svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      background:
+              radial-gradient(circle at 1px 1px, rgba(255,255,255,0.09) 1px, transparent 0) 0 0 / 24px 24px,
+              linear-gradient(transparent, transparent);
+    }
+
+    /* Visual styling for drawings */
+    .shape {
+      stroke: var(--ink);
+      stroke-width: 2;
+      pointer-events: stroke;
+      fill: none;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .shape.selected {
+      stroke: var(--accent);
+      stroke-width: 3;
+    }
+
+    /* Handle UI */
+    .helper-line {
+      stroke: rgba(255,209,102,0.55);
+      stroke-width: 1.5;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .handle {
+      fill: var(--handle);
+      stroke: rgba(0,0,0,0.55);
+      stroke-width: 1;
+      cursor: grab;
+    }
+    .handle.anchor {
+      fill: var(--accent);tog
+    }
+
+    .handle:active { cursor: grabbing; }
+
+    .overlay-note {
+      position: absolute;
+      left: 12px;
+      bottom: 12px;
+      color: rgba(230,238,252,0.75);
+      background: rgba(16,24,39,0.6);
+      border: 1px solid rgba(255,255,255,0.10);
+      padding: 8px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      max-width: 520px;
+      backdrop-filter: blur(6px);
+    }
+
+    code { color: #b5d6ff; }
+  </style>
+</head>
+
+<body>
+<header>
+  <button id="toolSelect" class="btn">Select</button>
+  <button id="toolLine" class="btn active">Line</button>
+  <button id="toolBezier" class="btn">Bezier</button>
+  <button id="toolExportLog" class="btn">Export Log</button>
+
+  <div class="hint">
+    Line: click-drag. Bezier: click-drag start handle, then click-drag end handle.
+    Drag points to edit.
+  </div>
+</header>
+
+<div id="stage">
+  <div class="overlay-note">
+    This is a minimal scene-graph approach: each shape has 2 anchors + (optionally) 2 Bezier handles,
+    rendered as SVG + draggable handles (Interact.js). The path updates live via SVG.js.
+  </div>
+</div>
+
+<script>
+  // -------------------------
+  // Utilities
+  // -------------------------
+  function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
+
+  function clientToSvgPoint(svgEl, clientX, clientY) {
+    const pt = svgEl.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    const ctm = svgEl.getScreenCTM();
+    if (!ctm) return { x: clientX, y: clientY };
+    const inv = ctm.inverse();
+    const sp = pt.matrixTransform(inv);
+    return { x: sp.x, y: sp.y };
+  }
+
+  function setBtnActive(activeId) {
+    for (const id of ["toolSelect","toolLine","toolBezier","toolExportLog"]) {
+      document.getElementById(id).classList.toggle("active", id === activeId);
+    }
+  }
+
+  // -------------------------
+  // Setup SVG drawing surface
+  // -------------------------
+  const stage = document.getElementById("stage");
+  const draw = SVG().addTo(stage).size("100%", "100%");
+  const svgNode = draw.node;
+
+  // Two top-level layers: shapes and UI overlay (handles)
+  const uiLayer = draw.group().id("ui");
+  const shapesLayer = draw.group().id("shapes");
+  const previewLayer = draw.group().id("preview");
+
+  // Keep everything in a simple registry
+  const model = new Map(); // shapeId -> { type, ... }
+
+  let tool = "line"; // "select" | "line" | "bezier"
+  let draft = null;  // current in-progress shape info
+  let selectedIds = new Set();
+  let shapesToCopy = null;
+  let pasteOffset = { x: 30, y: 30 };
+
+  // -------------------------
+  //  Selection
+  // -------------------------
+  let marquee = null; // { start:{x,y}, rect:SVG.Rect, pointerId }
+  function rectFromPoints(a, b) {
+    const x = Math.min(a.x, b.x);
+    const y = Math.min(a.y, b.y);
+    const w = Math.abs(a.x - b.x);
+    const h = Math.abs(a.y - b.y);
+    return { x, y, w, h, l:x, t:y, r:x+w, b:y+h };
+  }
+  function boxesIntersect(R, B) {
+    return !(B.l > R.r || B.r < R.l || B.t > R.b || B.b < R.t);
+  }
+  function shapeBBox(shape) {
+    // hitPath has the “fat stroke” selection target; bbox() is in SVG coords
+    const bb = (shape.hitPath || shape.path).bbox();
+    return { l: bb.x, t: bb.y, r: bb.x + bb.width, b: bb.y + bb.height };
+  }
+  function clearAllSelected() {
+    console.log("clearing all currently selected ", selectedIds);
+    for (const [, s] of model) s.path.removeClass("selected");
+    selectedIds.clear();
+  }
+  function shapesAreSelected() {
+    return selectedIds.size !== 0;
+  }
+
+  // -------------------------
+  // UI logging
+  // -------------------------
+  const history = []; // action stack
+  const log = []; // action log
+
+  function logAction(cmd) {
+    // used for logging actions that we don't want to add to the commit stream
+    log.push(cmd);
+  }
+
+  function commitAction(cmd) {
+    cmd.actionID = newId("action")
+    // cmd object example: { type: "createBezier", data: shape, undo: shape.undo}
+    history.push(cmd);
+    log.push(cmd);
+    console.log("commiting action", cmd)
+    console.log("history");
+    console.log(history);
+  }
+
+  function undoAction() {
+    const cmd = history.pop();
+    log.push({ type: "undo", data: { action: cmd } });
+    if (cmd == null) return;
+    console.log("undoing action", cmd);
+    cmd.undo(cmd.data);
+    console.log("current history", history);
+    return cmd;
+  }
+
+  // -------------------------
+  // Toolbar
+  // -------------------------
+  function activateSelectTool() {
+    tool = "select";
+    setBtnActive("toolSelect");
+  }
+
+  document.getElementById("toolSelect").addEventListener("click", activateSelectTool );
+  document.getElementById("toolLine").addEventListener("click",   () => { tool = "line";   setBtnActive("toolLine"); shapeToCopy = null; });
+  document.getElementById("toolBezier").addEventListener("click", () => { tool = "bezier"; setBtnActive("toolBezier"); shapeToCopy = null; });
+  document.getElementById("toolExportLog").addEventListener("click", async () => {
+      const data = JSON.stringify(log, null, 2);
+      if (window.showSaveFilePicker) {
+        try {
+          const handle = await showSaveFilePicker({
+            suggestedName: "log.json",
+          });
+          const writable = await handle.createWritable();
+          await writable.write(data);
+          await writable.close();
+          return;
+        } catch {}
+      }
+      // fallback
+      const blob = new Blob([data], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = Object.assign(document.createElement("a"), {
+        href: url,
+        download: "log.json",
+      });
+      a.click();
+      URL.revokeObjectURL(url);
+  });
+
+
+
+  // -------------------------
+  // Geometry helpers
+  // -------------------------
+  function addPoints(p1, p2) {
+    return {x: p1.x + p2.x, y: p1.y + p2.y};
+  }
+
+  function subtractPoints(p1, p2) {
+    return {x: p1.x - p2.x, y: p1.y - p2.y};
+  }
+
+  function reverseVector(p) {
+    return {x: -p.x, y: -p.y}
+  }
+
+  function radiansToAngle(radians) {
+    const angle = radians * 180 / Math.PI;
+    console.log(angle);
+    if (angle < 0) {
+      return 360 + angle;
+    } else {
+      return angle;
+    }
+  }
+
+  function angleFromXPosAxis(p) {
+    // returns the angle between a 2D vector and the X axis
+    const z = Math.sqrt(p.x**2 + p.y**2);
+    const angle = Math.acos2(p.x / z);
+    if (p.y >= 0) {
+      return angle;
+    } else {
+      return 360 - angle;
+    }
+  }
+
+  function snapToAxis(p, angleFromXPos) {
+    if (angleFromXPos < 45 || angleFromXPos >= 315) {
+      return {x: p.x, y: 0};
+    } else if (45 <= angleFromXPos && angleFromXPos < 135) {
+      return {x: 0, y: p.y};
+    } else if (135 <= angleFromXPos && angleFromXPos < 225) {
+      return {x: p.x, y: 0};
+    } else if (225 <= angleFromXPos && angleFromXPos < 315) {
+      return {x: 0, y: p.y};
+    }
+  }
+
+  // -------------------------
+  // Shape helpers
+  // -------------------------
+  function getCircleElementCenter(el) {
+    return {
+      x: Number(el.cx()),
+      y: Number(el.cy()),
+    };
+  }
+
+  // -------------------------
+  // Shape builders
+  // -------------------------
+  function newId(prefix) {
+    return `${prefix}_${Math.random().toString(16).slice(2)}`;
+  }
+
+  function createHandle(x, y,{ anchor=false } = {}) {
+    const r = anchor ? 6 : 5;
+    const c = uiLayer.circle(r * 2).center(x, y);
+    c.addClass("handle");
+    if (anchor) c.addClass("anchor");
+    return c;
+  }
+
+  function screenDeltaToSVGDelta(screenDx, screenDy) {
+    // Convert screen deltas to SVG deltas approximately by using CTM scale.
+    // For a full editor: do exact inverse-matrix math; this is "good enough" for prototyping.
+    const ctm = svgNode.getScreenCTM();
+    const sx = ctm ? ctm.a : 1;
+    const sy = ctm ? ctm.d : 1;
+    const dx = screenDx / sx;
+    const dy = screenDy / sy;
+    return {x: dx, y: dy};
+  }
+
+  function wireDraggableHandle(handleEl) {
+    // Interact works on DOM nodes; SVG.js element has .node
+    let startPos = null;
+    const shapeID = handleEl.attr("data-id");
+    const dataRole = handleEl.attr("data-role");
+
+    interact(handleEl.node).draggable({
+      listeners: {
+        start (event) {
+          if (tool !== "select") return;
+          startPos = getCircleElementCenter(handleEl);
+          // deselect everything except the shape this handle belongs to
+          clearAllSelected();
+          selectShape(shapeID);
+        },
+        move (event) {
+          if (tool !== "select") return;
+          // let drafting code take control if in drafting mode
+          console.log("moving handle, draft: ", draft);
+          svgDelta = screenDeltaToSVGDelta(event.dx, event.dy);
+          const newLoc = addPoints(getCircleElementCenter(handleEl), svgDelta);
+          handleEl.center(newLoc.x, newLoc.y);
+          const shape = model.get(shapeID);
+          shape.update();
+        },
+        end (event) {
+          if (tool !== "select") return;
+          if (startPos == null) return;
+          const endPos = getCircleElementCenter(handleEl);
+          const undoMove = (data) => {
+            console.log("called undo move handle")
+            const shape = model.get(data.shapeID);
+            const handleEl = shape[data.dataRole];
+            handleEl.center(startPos.x, startPos.y);
+            shape.update();
+          };
+          const shapeData = copyShapeData(model.get(shapeID));
+          commitAction({ type: "moveHandle", data: {shapeID, shapeData, dataRole, startPos, endPos}, undo: undoMove});
+        }
+      }
+    });
+  }
+
+  function createPoint(shapeID, dataRole, isAnchor, point) {
+    let h = createHandle(point.x, point.y, { anchor: isAnchor });
+    h.attr({ "data-id": shapeID, "data-role": dataRole });
+    const shape = model.get(shapeID);
+    wireDraggableHandle(h);
+    shape[dataRole] = h;
+    return h;
+  }
+
+  function addShapeHitPath(shape) {
+    shape.hitPath = shapesLayer.use(shape.path.id()); // <use href="#p1">
+    shape.hitPath.fill("none")
+            .stroke({ width: 10, color: "transparent" })
+            .attr({ "data-id": shape.id, "pointer-events": "stroke" });
+  }
+
+  function finalizeShape(shape) {
+    addShapeHitPath(shape);
+    addSelectListener(shape);
+    wireDraggableShape(shape);
+  }
+
+  function deleteShapes(deletedShapeIDs, commit) {
+    const deletedShapes = deletedShapeIDs.map(x => model.get(x));
+    console.log("deleting shapes", deletedShapeIDs);
+    for (const shape of deletedShapes) {
+      shape.path.removeClass("selected");
+      // delete all the listeners
+      for (const k of Object.keys(shape)) {
+        if (shape[k]?.node instanceof Element) {
+          try { interact(node).unset(); }// removes draggable/resizable/etc + internal refs
+          catch (err) {} // no listeners
+        }
+        if (shape[k] && typeof shape[k].remove === "function") shape[k].remove();
+      }
+      model.delete(shape.id);
+    }
+    draft = null;
+    const undoDeleteShape = (data) => {
+      // RECREATED SHAPE MUST HAVE THE SAME ID AS THE ORIGINAL SHAPE
+      console.log("undo delete shapes");
+      const newShapeIDs = Array.from(data.shapeData, ([shapeID, shapeData]) => createShapeFromData(shapeData, shapeID));
+      const deletedShapes = newShapeIDs.map(x => model.get(x));
+      pasteShapes(deletedShapes, {x: 0, y: 0}, false); // paste back the shape without any offset
+      // select the restored shape
+      selectShapes(newShapeIDs);
+    };
+    if (commit) {
+      const deletedShapeData = new Map(deletedShapes.map(x => [x.id, copyShapeData(x)]));
+      commitAction({ type: "deleteShapes", data: {shapeData: deletedShapeData}, undo: undoDeleteShape });
+    }
+  }
+
+  function addSelectListener(shape) {
+    shape.hitPath.node.addEventListener("pointerdown", (e) => {
+      if (tool !== "select") return;
+      // if shift key is down, keep whatever is currently selected
+      // and toggle the selection of the clicked on shape
+      if (e.shiftKey) {
+        if (selectedIds.has(shape.id)) {
+          deselectShape(shape.id);
+          logAction({ type: "deselect", data: {shapeID: shape.id, shapeData: copyShapeData(shape)} });
+        } else {
+          selectShape(shape.id);
+          logAction({ type: "select", data: {shapeID: shape.id, shapeData: copyShapeData(shape)} });
+        }
+      } else {
+        // if shift key is not down and shape is currently selected, do nothing
+        // if shape is not currently selected deselect everything and select the clicked shape
+        if (!selectedIds.has(shape.id)) {
+          clearAllSelected();
+          selectShape(shape.id);
+          logAction({ type: "select", data: {shapeID: shape.id, shapeData: copyShapeData(shape)} });
+        }
+      }
+    });
+  }
+
+  function deselectShape(shapeID) {
+    shape = model.get(shapeID);
+    shape.path.removeClass("selected");
+    selectedIds.delete(shapeID);
+  }
+
+  function selectShapes(shapeIDs) {
+    for (const shapeID of shapeIDs) {
+      selectShape(shapeID);
+    }
+  }
+
+  function selectShape(id) {
+    selectedIds.add(id);
+    for (const [sid, s] of model) {
+      if (sid === id) { s.path.addClass("selected"); s.update(); console.log("selecting shape");}
+    }
+  }
+
+  function translateShape(shape, d) {
+    // Move any handles that exist on the shape
+    const moveHandle = (el) => {
+      const newLoc = addPoints(getCircleElementCenter(el), d);
+      el.center(newLoc.x, newLoc.y);
+    };
+    console.log("called translate shape");
+    if (shape.type === "line") {
+      moveHandle(shape.a);
+      moveHandle(shape.b);
+    } else if (shape.type === "bezier") {
+      moveHandle(shape.a);
+      moveHandle(shape.b);
+      moveHandle(shape.c1);
+      moveHandle(shape.c2);
+    }
+    shape.update();
+  }
+
+  function copyShapeData(shape) {
+    if (shape.type === "line") {
+      const pa = getCircleElementCenter(shape.a);
+      const pb = getCircleElementCenter(shape.b);
+      return {type: "line", pa, pb};
+    } else if (shape.type === "bezier") {
+      const pa = getCircleElementCenter(shape.a);
+      const pb = getCircleElementCenter(shape.b);
+      const pc1 = getCircleElementCenter(shape.c1);
+      const pc2 = getCircleElementCenter(shape.c2);
+      return {type: "bezier", pa, pc1, pc2, pb};
+    }
+  }
+
+  function copySelectedShapes() {
+    console.log("copying selected shapes: ", selectedIds);
+    if (!shapesAreSelected()) return; // do nothing if no shape is currently selected
+    shapesToCopy = Array.from(selectedIds).map(x => model.get(x));
+    console.log("shapes to copy", shapesToCopy);
+  }
+
+  function createShapeFromData(shapeData, shapeID) {
+    if (shapeData.type === "line") {
+      return addLine(shapeData, shapeID);
+    } else if (shapeData.type === "bezier") {
+      return addCubicBezier(shapeData, shapeID);
+    }
+  }
+
+  function addShapeCopy(shape) {
+    const shapeData = copyShapeData(shape);
+    return createShapeFromData(shapeData);
+  }
+
+  function undoPaste(data) {
+    console.log(data);
+    for (const shapeID of data.shapeIDs) {
+      model.get(shapeID).undo();
+    }
+  }
+
+  function pasteShapes(shapes, offset, commit, originalShapeIDs) {
+    console.log("pasting shapes to copy:", shapes);
+    for (const shape of shapes) {
+      shape.finalize();
+      translateShape(shape, offset);
+    }
+    const shapeIDs = shapes.map(x => x.id);
+
+    if (commit) {
+      // only commit when user is copy pasting a shape, otherwise pasting was called by undoDelete
+      const shapeData = shapes.map(x => copyShapeData(x));
+      console.log("shape Ids pasted: ", shapeIDs);
+      console.log("shape Data pasted: ", shapeData);
+      console.assert(originalShapeIDs);
+      commitAction({ type: "copyPasteShapes", data: {shapeIDs, shapeData, originalShapeIDs, offset}, undo: undoPaste});
+    }
+
+    // automatically select the newly pasted shapes
+    clearAllSelected();
+    selectShapes(shapeIDs);
+  }
+
+  function deleteSelectedShapes() {
+    // user direct action to delete selected shape
+    console.log("deleting selected shapes");
+    if (!shapesAreSelected()) return;
+    deleteShapes(Array.from(selectedIds), true);
+    selectedIds.clear();
+  }
+
+  function wireDraggableShape(shape) {
+    let posDelta = null;
+    interact(shape.hitPath.node).draggable({
+      listeners: {
+        start: (event) => {
+          if (tool !== "select") return;
+          selectShape(shape.id);
+          posDelta = {x: 0, y: 0};
+        },
+        move (event) {
+          if (tool !== "select") return;
+          console.log("dragging shape");
+          // if there are other currently selected shapes, those should move with this one
+          const d = screenDeltaToSVGDelta(event.dx, event.dy);
+          for (const shapeID of selectedIds) {
+            translateShape(model.get(shapeID), d);
+          }
+          posDelta = addPoints(posDelta, d);
+        },
+        end (event) {
+          if (posDelta == null || tool !== "select") return;
+          const undoMove = (data) => {
+            console.log("called undo move on shapes")
+            for (const shapeID of data.shapeIDs) {
+              const shape = model.get(shapeID)
+              translateShape(shape, reverseVector(posDelta));
+            }
+          };
+          const shapeIDs = Array.from(selectedIds);
+          const shapeData = shapeIDs.map(x => copyShapeData(model.get(x)));
+          commitAction({ type: "moveShapes", data: {shapeIDs, shapeData, posDelta}, undo: undoMove});
+        }
+      }
+    });
+  }
+
+  // ---- LINE ----
+  function addLine(shapeData, id) {
+    const pa = shapeData.pa;
+    const pb = shapeData.pb;
+    if (id == null) {
+      id = newId("line")
+    }
+    const pathID = newId("path");
+    const path = shapesLayer.path("").addClass("shape");
+    path.attr({ "data-id": id, "id": pathID });
+
+    let a = null;
+    let b = null;
+    const shape = { type: "line", id, path, a, b, update: null };
+    model.set(id, shape);
+    shape.finalize = () => { finalizeShape(shape); }
+    shape.undo = (data) => { deleteShapes([shape.id], false); }
+
+    shape.update = () => {
+      console.log("line updates");
+      if (shape.a && shape.b) {
+        const A = getCircleElementCenter(shape.a), B = getCircleElementCenter(shape.b);
+        shape.path.plot(`M ${A.x} ${A.y} L ${B.x} ${B.y}`);
+      }
+    };
+    createPoint(id, "a", true, pa);
+    if (pb) {
+      createPoint(id, "b", true, pb);
+    }
+    shape.update();
+    return id;
+  }
+
+  // ---- CUBIC BEZIER ----
+  function addCubicBezier(shapeData, id) {
+    const pa = shapeData.pa;
+    const pc1 = shapeData.pc1;
+    const pc2 = shapeData.pc2;
+    const pb = shapeData.pb;
+
+    if (id == null) {
+      id = newId("bezier")
+    }
+    const pathID = newId("path");
+    const path = shapesLayer.path("").addClass("shape");
+    path.attr({ "data-id": id, "id": pathID });
+
+    let a = null;
+    let b = null;
+    let cl1 = null;
+    let c1 = null;
+    let cl2 = null;
+    let c2 = null;
+
+    const shape = { type: "bezier", id, path, a, b, c1, c2, cl1, cl2, update: null, previewLine: null };
+    shape.finalize = () => { finalizeShape(shape); }
+    shape.undo = (data) => { deleteShapes([shape.id], false); };
+
+    shape.clearPreviews = () => {
+      shape.previewLine.remove();
+      shape.previewLine = null;
+    }
+
+    shape.update = () => {
+      console.log("Bezier update");
+      const A = getCircleElementCenter(shape.a);
+      let C1 = null;
+      let C2 = null;
+      let B = null;
+
+      // draw only the parts of the bezier that are fully defined
+      if (shape.c1) {
+        C1 = getCircleElementCenter(shape.c1);
+        shape.cl1.plot(A.x, A.y, C1.x, C1.y);
+      }
+      if (shape.b) {
+        B = getCircleElementCenter(shape.b);
+      }
+      if (shape.c2) {
+        C2 = getCircleElementCenter(shape.c2);
+        shape.cl2.plot(B.x, B.y, C2.x, C2.y);
+      }
+      // if only A is defined, just draw the anchor point
+      // if A and C1 are defined, draw the control line from A to C1
+      // if A, C1, and B are defined, assume C2 is at B
+      if (A && C1 && B && C2 == null) {
+        path.plot(`M ${A.x} ${A.y} C ${C1.x} ${C1.y}, ${B.x} ${B.y}, ${B.x} ${B.y}`);
+      } else if (A && C1 && B && C2) {
+        path.plot(`M ${A.x} ${A.y} C ${C1.x} ${C1.y}, ${C2.x} ${C2.y}, ${B.x} ${B.y}`);
+      }
+    };
+    model.set(id, shape);
+
+    createPoint(id, "a", true, pa);
+
+    // helper lines from anchors to handles
+    if (pc1) {
+      shape.cl1 = uiLayer.line(pa.x, pa.y, pc1.x, pc1.y).addClass("helper-line");
+      createPoint(id, "c1", false, pc1);
+    }
+    if (pc2) {
+      shape.cl2 = uiLayer.line(pb.x, pb.y, pc2.x, pc2.y).addClass("helper-line");
+      createPoint(id, "c2", false, pc2);
+    }
+    if (pb) {
+      createPoint(id, "b", true, pb);
+    }
+    shape.update();
+
+    return id;
+  }
+
+  // -------------------------
+  // Drawing interactions
+  // -------------------------
+  svgNode.addEventListener("pointerdown", (e) => {
+    // If draft object is null, only start drawing if clicking blank space (not a handle)
+    if (tool === "select" && draft == null) {
+      const isHandle = e.target && e.target.classList && e.target.classList.contains("handle");
+      const hitSomething = e.target && e.target.closest && e.target.closest("[data-id]"); // shape hitPath or handle
+
+      if (!hitSomething) {
+        clearAllSelected();
+      }
+      // Only start marquee on empty space (not on a shape/handle)
+      if (!isHandle && !hitSomething) {
+        const p0 = clientToSvgPoint(svgNode, e.clientX, e.clientY);
+        // clear previous selection unless Shift is held
+        clearAllSelected();
+
+        const r = uiLayer.rect(0, 0)
+                .move(p0.x, p0.y)
+                .fill({ color: "rgba(90,167,255,0.15)" })
+                .stroke({ color: "rgba(90,167,255,0.9)", width: 1, dasharray: "6,4" })
+                .attr({ "pointer-events": "none" });
+
+        marquee = { start: p0, rect: r, pointerId: e.pointerId };
+        svgNode.setPointerCapture?.(e.pointerId);
+        e.preventDefault();
+        return;
+      }
+      if (isHandle) return;
+      console.log("pointerdown to draw new shape");
+    }
+
+    const p = clientToSvgPoint(svgNode, e.clientX, e.clientY);
+
+    if (tool === "line") {
+      console.log("pointerdown creating line");
+      clearAllSelected();
+      // Start a draft line
+      const a = p;
+      let b = null;
+      const id = addLine({pa: a, pb: b});
+      draft = { tool: "line", id, step: 0 };
+      e.preventDefault();
+    }
+
+    if (tool === "bezier") {
+      console.log("pointerdown bezier");
+      clearAllSelected();
+      if (draft) {console.log("draft step: ", draft.step);}
+
+      if (draft == null) {
+        const A = p;
+        let C1 = null;
+        let C2 = null;
+        let B = null;
+        const id = addCubicBezier({pa: A, pc1: C1, pc2: C2, pb: B});
+        draft = { tool: "bezier", id, step: 0 };
+      } else if (draft.tool === "bezier" && draft.step === 1) {
+        console.log("pointerdown bezier setting anchor point B draft step is now 2");
+        createPoint(draft.id, "b", true, p);
+        draft.step = 2;
+      }
+      e.preventDefault();
+    }
+  });
+
+  svgNode.addEventListener("pointermove", (e) => {
+    if (marquee) {
+      console.log("marquee moving");
+      const p = clientToSvgPoint(svgNode, e.clientX, e.clientY);
+      const R = rectFromPoints(marquee.start, p);
+
+      marquee.rect.move(R.x, R.y).size(R.w, R.h);
+      // Live selection: select anything intersecting the marquee rect
+      for (const [sid, s] of model) {
+        const B = shapeBBox(s);
+        if (boxesIntersect(R, B)) {
+          selectShape(sid);
+        } else if (!e.shiftKey) {
+          // If not additive, remove selection when it leaves the box
+          deselectShape(sid);
+        }
+      }
+      e.preventDefault();
+      return; // IMPORTANT: don't fall through to draft drawing
+    }
+
+    if (draft == null) return;
+    const p = clientToSvgPoint(svgNode, e.clientX, e.clientY);
+    const shape = model.get(draft.id);
+    if (shape == null) return;
+
+    if (draft.tool === "line" && shape.type === "line") {
+      // update endpoint b while dragging
+      const A = getCircleElementCenter(shape.a)
+      let B = p;
+
+      // if the shift key is down, constrain B to be axis aligned
+      if (e.shiftKey) {
+        const pShifted = subtractPoints(p, A);
+        const angle = radiansToAngle(Math.atan2(pShifted.y, pShifted.x));
+        B = addPoints(snapToAxis(pShifted, angle), A);
+      }
+
+      shape.path.plot(`M ${A.x} ${A.y} L ${B.x} ${B.y}`);
+      console.log("plotting line as B moves")
+    }
+
+    if (draft.tool === "bezier" && shape.type === "bezier") {
+      const A = getCircleElementCenter(shape.a);
+
+      if (draft.step === 0) {
+        console.log("pointer moving locking down anchor point A, setting C1")
+        if (shape.previewLine == null) {
+          shape.previewLine = uiLayer.line(A.x, A.y, p.x, p.y).addClass("helper-line");
+        }
+        shape.previewLine.plot(A.x, A.y, p.x, p.y)
+      } else if (draft.step === 1) {
+        // user is moving mouse to set anchor point B, place both B and C2 where mouse is
+        console.log("pointer moving in bezier step 1, updating anchor point B");
+        let C1 = getCircleElementCenter(shape.c1);
+        shape.cl1.plot(A.x, A.y, C1.x, C1.y);
+        shape.path.plot(`M ${A.x} ${A.y} C ${C1.x} ${C1.y}, ${p.x} ${p.y}, ${p.x} ${p.y}`);
+      } else if (draft.step === 2) {
+        // user is dragging to set C2
+        console.log("pointer dragging in bezier step 2, updating C2");
+        let B = getCircleElementCenter(shape.b);
+        let C1 = getCircleElementCenter(shape.c1);
+        shape.previewLine.plot(B.x, B.y, p.x, p.y);
+        shape.path.plot(`M ${A.x} ${A.y} C ${C1.x} ${C1.y}, ${p.x} ${p.y}, ${B.x} ${B.y}`);
+      }
+
+      // update path + helper lines
+      if (shape.c1) {
+        C1 = getCircleElementCenter(shape.c1);
+        shape.cl1.plot(A.x, A.y, C1.x, C1.y);
+      }
+    }
+  });
+
+  svgNode.addEventListener("pointerup", (e) => {
+    console.log("pointerup");
+
+    if (marquee) {
+      console.log("removing marquee");
+      e.preventDefault();
+      const rect = marquee.rect;
+      const shapeIDs = Array.from(selectedIds);
+      const shapeData = shapeIDs.map(x => copyShapeData(model.get(x)));
+      // only log selection if anything has been selected
+      if (shapeData.length > 0) {
+        logAction({type: "selectWithMarquee",
+          data: {rect: {x: rect.x(), y: rect.y(), width: rect.width(), height: rect.height()}, shapeIDs, shapeData}
+        });
+      }
+      marquee.rect.remove();
+      marquee = null;
+      return; // IMPORTANT: don't fall through to draft finalize
+    }
+
+    if (draft == null) return;
+
+    const p = clientToSvgPoint(svgNode, e.clientX, e.clientY);
+    const shape = model.get(draft.id);
+    if (shape == null) { draft = null; return; }
+
+    if (draft.tool === "line") {
+      // finalize line, commit point B
+      const A = getCircleElementCenter(shape.a);
+      let B = p;
+
+      if (e.shiftKey) {
+        const pShifted = subtractPoints(p, A);
+        const angle = radiansToAngle(Math.atan2(pShifted.y, pShifted.x));
+        B = addPoints(snapToAxis(pShifted, angle), A);
+      }
+      createPoint(draft.id, "b", true, B);
+
+      shape.path.plot(`M ${A.x} ${A.y} L ${B.x} ${B.y}`);
+      shape.finalize();
+      const shapeData = copyShapeData(shape);
+      commitAction({ type: "createLine", data: {shapeID: shape.id, shapeData}, undo: shape.undo});
+      draft = null;
+      return;
+    }
+
+    if (draft.tool === "bezier" && shape.type === "bezier") {
+      if (draft.step === 0) {
+        // Finish step 0: lock in C1
+        // now wait for step 1 click down to set B.
+        const A  = getCircleElementCenter(shape.a);
+        console.log("pointerup bezier setting control point C1 and draft step = 1 ");
+        createPoint(draft.id, "c1", false, p);
+        const C1 = getCircleElementCenter(shape.c1);
+        shape.cl1 = uiLayer.line(A.x, A.y, C1.x, C1.y).addClass("helper-line");
+        draft.step = 1;
+
+        shape.path.plot(`M ${A.x} ${A.y} C ${C1.x} ${C1.y}, ${p.x} ${p.y}, ${p.x} ${p.y}`);
+        return;
+      }
+
+      if (draft.step === 2) {
+        console.log("pointer up bezier fixing control point C2, done drafting bezier");
+        createPoint(draft.id, "c2", false, p);
+        let B = getCircleElementCenter(shape.b);
+        let C2 = getCircleElementCenter(shape.c2);
+        shape.clearPreviews();
+        shape.cl2 = uiLayer.line(B.x, B.y, C2.x, C2.y).addClass("helper-line");
+        shape.cl2.plot(B.x, B.y, C2.x, C2.y);
+        shape.finalize();
+        const shapeData = copyShapeData(shape);
+        commitAction({ type: "createBezier", data: {shapeID: shape.id, shapeData}, undo: shape.undo});
+        draft = null;
+      }
+    }
+  });
+
+  // Optional: Esc cancels current draft
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && draft) {
+      // Remove the draft shape entirely
+      const shape = model.get(draft.id);
+      if (shape) {
+        shape.undo({id: draft.id});
+      }
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+      e.preventDefault();
+      // do not allow undoing while drafting
+      if (!draft) {
+        action = undoAction();
+      }
+    }
+    // hot key for select tool
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "e") {
+      activateSelectTool();
+    }
+    // copy shape
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
+      e.preventDefault();
+      copySelectedShapes();
+    }
+    // paste
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
+      e.preventDefault();
+      if (shapesToCopy.length === 0) return; // do nothing if no shapes to copy
+      console.assert(Array.isArray(shapesToCopy), "Expected shapesToCopy to be an array");
+      const copiedShapes = shapesToCopy.map(shape => model.get(addShapeCopy(shape)));
+      const originalShapeIDs = shapesToCopy.map(shape => shape.id);
+      pasteShapes(copiedShapes, pasteOffset, true, originalShapeIDs);
+    }
+
+    if (e.key.toLocaleLowerCase() === "backspace") {
+      e.preventDefault();
+      deleteSelectedShapes();
+    }
+  });
+
+</script>
+</body>
+</html>

@@ -1,0 +1,232 @@
+Your job is to analyze a sequence of user generated drawing actions in a 2D SVG vector graphics UI to determine whether the action sequence can be simplified by adding new drawing abstractions for the user.
+The goal is to make the drawing process more efficient for the user. The user can create vector elements by clicking and dragging the mouse or using hotkeys.
+
+Below is a documentation of the current actions provided by the UI and how they will be presented to you in the recorded action sequence.
+Every action has a unique reference ID called actionID.
+
+function name: createLine
+example recorded action data:
+{
+  "type": "createLine",
+  "data": {
+    "shapeID": "line_64b4ec9242bf",
+     "shapeData": {
+     "type": "line",
+     "pa": {
+       "x": 193.73828125,
+       "y": 143.13671875
+     },
+     "pb": {
+       "x": 271.57421875,
+       "y": 182.94140625
+     }
+   }
+  },
+  "actionID": "action_5eede44084661"
+}
+purpose: draw a line from pa to pb
+user behavior: mouse pointer down at point pa, drag mouse to point pb, mouse pointer up
+
+function name: createBezier
+example recorded action data:
+{
+  "type": "createBezier",
+  "data": {
+    "shapeID": "bezier_b43f45965d324",
+    "shapeData": {
+    "type": "bezier",
+    "pa": {
+      "x": 149.69140625,
+      "y": 139.078125
+    },
+    "pc1": {
+      "x": 149.69140625,
+      "y": 341.19921875
+    },
+    "pc2": {
+      "x": 592.01953125,
+      "y": 153.4453125
+    },
+    "pb": {
+      "x": 501.0625,
+      "y": 36.7890625
+    }
+    }
+  },
+  "actionID": "action_ff3b86006a5f58"
+}
+purpose: draw a bezier curve with anchor points pa and pb and control points pc1 and pc2
+user behavior: mouse pointer down at pa, drag mouse to pc1, mouse pointer up, drag mouse to pb, mouse pointer down, drag mouse to pc2, mouse pointer up
+
+function name: moveShapes
+example recorded action data:
+{
+  "type": "moveShapes",
+  "data": {
+    "shapeIDs": [
+    "bezier_3670d5c0f11378"
+    ],
+    "shapeData": [
+    {
+      "type": "bezier",
+      "pa": {
+      "x": 210.23046875,
+      "y": 219.7265625
+      },
+      "pc1": {
+      "x": 228.76171875,
+      "y": 383.33984375
+      },
+      "pc2": {
+      "x": 603.8203125,
+      "y": 417.109375
+      },
+      "pb": {
+      "x": 446.01171875,
+      "y": 206.5546875
+      }
+    }
+    ],
+    "posDelta": {
+    "x": 41.93359375,
+    "y": 102.8515625
+    }
+  },
+  "actionID": "action_12e898a2223498"
+}
+purpose: translate the selected shapes by posDelta.x and posDelta.y. shapeData is a list of the shape data of all the selected shapes before translation.
+user behavior: mouse pointer down at pb, drag mouse mouse to pb, mouse pointer up
+
+function name: moveHandle
+example recorded action data:
+{
+  "type": "moveHandle",
+  "data": {
+    "shapeID": "line_401b2c02f98408",
+    "shapeData": {
+    "type": "line",
+    "pa": {
+      "x": 294.10546875,
+      "y": 516.92578125
+    },
+    "pb": {
+      "x": 442.8828125,
+      "y": 475.74609375
+    }
+    },
+    "dataRole": "a",
+    "startPos": {
+    "x": 257.8359375,
+    "y": 319.32421875
+    },
+    "endPos": {
+    "x": 294.10546875,
+    "y": 516.92578125
+    }
+  },
+  "actionID": "action_a64c4de63d1b6"
+}
+purpose: translate the selected handle of a shape from startPos to endPos. A line has two handles: pa and pb. A bezier curve has four handles: pa, pb, pc1, and pc2.
+user behavior: mouse pointer down at startPos, drag mouse to pb, mouse pointer up
+
+function name: selectWithMarquee
+example recorded action data:
+{
+  "type": "selectWithMarquee",
+  "data": {
+    "rect": {
+      "x": 144.234375,
+      "y": 71.73046875,
+      "width": 148.1484375,
+      "height": 161.50390625
+    },
+    "shapeIDs": [
+      "line_f99ac50d71bb9"
+    ],
+    "shapeData": [
+      {
+        "type": "line",
+        "pa": {
+          "x": 161.78515625,
+          "y": 95.375
+        },
+        "pb": {
+          "x": 257.6484375,
+          "y": 189.1796875
+        }
+      }
+    ]
+  }
+}
+purpose: select the objects that intersect with the rectangle marquee defined by top left corner at rect.x, rect.y, width = rect.with, and height = rect.height. shapeData is a list of all the vector objects that have been selected by the marquee.
+user behavior: mouse pointer down at rect.x, rect.y, mouse drag to rect.x + rect.width, rect.y + rect.height, pointer up
+
+function: undo
+example recorded action data:
+{
+  "type": "undo",
+  "data": {
+    "action": {
+      "type": "createLine",
+      "data": {
+        "shapeID": "line_64b4ec9242bf",
+        "shapeData": {
+          "type": "line",
+          "pa": {
+            "x": 193.73828125,
+            "y": 143.13671875
+          },
+          "pb": {
+            "x": 271.57421875,
+            "y": 182.94140625
+          }
+        }
+      },
+      "actionID": "action_5eede44084661"
+    }
+  }
+}
+purpose: undo the effect of the action whose record is stored in data.action. This action being undone has actionID = data.actionID and occurs earlier in the observed action sequence.
+user behavior: keyboard press command and z
+
+function: copyPasteShapes
+example recorded action data:
+{
+  "type": "copyPasteShapes",
+  "data": {
+    "shapeIDs": [
+      "bezier_7362d12b86e528"
+    ],
+    "shapeData": [
+      {
+        "type": "bezier",
+        "pa": {
+          "x": 208.9140625,
+          "y": 274.109375
+        },
+        "pc1": {
+          "x": 208.9140625,
+          "y": 435.16015625
+        },
+        "pc2": {
+          "x": 481.96484375,
+          "y": 268.67578125
+        },
+        "pb": {
+          "x": 306.6796875,
+          "y": 262.3671875
+        }
+      }
+    ],
+    "originalShapeIDs": [
+      "bezier_7bfb95fb5b34c"
+    ],
+    "offset": {
+      "x": 30,
+      "y": 30
+    }
+  },
+  "actionID": "action_30c4b0d403596"
+}
+purpose: copy and paste all shapes inside data.shapeData offset from their original locations by data.offset.x, data.offset.y
+user behavior: keyboard press command and c then command and v
