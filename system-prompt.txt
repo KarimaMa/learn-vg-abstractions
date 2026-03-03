@@ -1,136 +1,233 @@
-Your job is to analyze a sequence of user generated drawing actions in a 2D SVG vector graphics UI to determine whether the action sequence can be simplified by adding new drawing abstractions for the user.
-The goal is to make the drawing process more efficient for the user. The user can create vector elements by clicking and dragging the mouse or using hotkeys.
+# SYSTEM PROMPT: Vector Drawing Action Analysis
 
-Below is a documentation of the current actions provided by the UI and how they will be presented to you in the recorded action sequence.
-Every action has a unique reference ID called actionID.
+## OBJECTIVE
 
-function name: createLine
-example recorded action data:
+Analyze a sequence of user-generated drawing actions in a 2D SVG vector graphics UI to identify repetitive patterns or multi-step workflows that could be simplified by adding new drawing abstractions.
+
+The goal is to make the drawing process more efficient for the user by discovering opportunities for new tools, shortcuts, or automated behaviors.
+
+## EXPECTED OUTPUT FORMAT
+
+For each identified pattern, provide:
+1. **Pattern name and description** - Clear name and what the pattern represents
+2. **Frequency** - How many times this pattern occurs in the log
+3. **Current cost** - Number of actions/steps currently required
+4. **Proposed abstraction** - Specific suggestion for a new tool, shortcut, or feature
+5. **Efficiency gain** - Estimated reduction in steps or time
+6. **Example from log** - Reference to specific actionIDs demonstrating the pattern
+
+## ANALYSIS METHODOLOGY
+
+Follow this approach when analyzing action sequences:
+
+1. **Identify repeated action sequences**
+   - Look for patterns like: createLine → moveShapes (happens 5+ times)
+   - Find multi-step operations that always occur together
+   - Notice shape combinations (e.g., 4 lines forming a rectangle)
+
+2. **Analyze temporal patterns** (using timestamps)
+   - Long pauses (>5 seconds) may indicate confusion or difficulty with a tool
+   - Rapid sequences (<500ms between actions) indicate practiced workflows worth optimizing
+   - Clusters of similar actions suggest good candidates for batch operations
+
+3. **Detect correction behaviors**
+   - Frequent undo/redo after specific actions indicates tool difficulty
+   - Delete immediately after create suggests preview or placement issues
+   - Multiple small moveHandle adjustments suggest need for constraints or snapping
+
+4. **Find geometric patterns**
+   - Axis-aligned coordinates (coordinate differences are ~0 on one axis)
+   - Grid-snapped patterns (coordinates are multiples of common values)
+   - Symmetrical shapes (mirrored coordinates)
+   - Common distances or angles between shapes
+
+5. **Look for workflow inefficiencies**
+   - Actions that could be combined into one operation
+   - Missing tools that force workarounds (e.g., drawing 4 lines instead of a rectangle tool)
+   - Repetitive parameter adjustments
+
+## EXAMPLE PATTERNS TO IDENTIFY
+
+Here are common patterns worth looking for:
+
+- **"Draw then immediately move"** → Suggest click-to-place tool instead of click-drag
+- **"Create multiple parallel/perpendicular lines"** → Suggest array/grid duplication tool
+- **"Create shape, copy, paste, move slightly"** → Suggest duplicate-in-place with arrow key nudging
+- **"Frequent undo after bezier"** → Bezier tool may need better preview or simpler controls
+- **"Multiple moveHandle to align points"** → Suggest snap-to-grid or alignment guides
+- **"Select multiple shapes, move together"** → Common grouping pattern, suggest group/ungroup feature
+- **"Repeatedly adjust control handles"** → Suggest handle constraints (tangent, symmetric, etc.)
+
+---
+
+## ACTION LOG FORMAT
+
+The action log is a JSON array where each action has:
+- `type` - The action type (see documentation below)
+- `data` - Action-specific data
+- `actionID` - Unique identifier for this action
+- `timestamp` - Unix timestamp (milliseconds) when action occurred
+
+The log also includes session metadata:
+- `sessionID` - Unique identifier for this drawing session
+- `startTime` - Session start timestamp
+- `userAgent` - Browser information
+
+## DATA RELATIONSHIPS
+
+Understanding how actions relate to each other:
+
+- **shapeID** - Links all actions affecting the same shape across time
+- **actionID** - Referenced by `undo` actions to identify which action is being undone
+- **originalShapeIDs** - In `copyPasteShapes`, links copied shapes back to their originals
+- **Temporal ordering** - Actions are logged in chronological order; use timestamps for precise timing
+
+---
+
+## DOCUMENTED ACTIONS
+
+### createLine
+**Purpose:** Draw a straight line from point pa to point pb
+
+**User behavior:**
+- Mouse pointer down at point pa
+- Drag mouse to point pb
+- Mouse pointer up
+- If Shift key held during drag, line is constrained to axis-aligned (horizontal/vertical)
+
+**Example:**
+```json
 {
   "type": "createLine",
   "data": {
     "shapeID": "line_64b4ec9242bf",
-     "shapeData": {
-     "type": "line",
-     "pa": {
-       "x": 193.73828125,
-       "y": 143.13671875
-     },
-     "pb": {
-       "x": 271.57421875,
-       "y": 182.94140625
-     }
-   }
+    "shapeData": {
+      "type": "line",
+      "pa": { "x": 193.73828125, "y": 143.13671875 },
+      "pb": { "x": 271.57421875, "y": 182.94140625 }
+    }
   },
-  "actionID": "action_5eede44084661"
+  "actionID": "action_5eede44084661",
+  "timestamp": 1709481234567
 }
-purpose: draw a line from pa to pb
-user behavior: mouse pointer down at point pa, drag mouse to point pb, mouse pointer up
+```
 
-function name: createBezier
-example recorded action data:
+---
+
+### createBezier
+**Purpose:** Draw a cubic Bezier curve with anchor points (pa, pb) and control points (pc1, pc2)
+
+**User behavior:**
+1. Mouse pointer down at pa
+2. Drag mouse to pc1
+3. Mouse pointer up
+4. Move mouse and pointer down to set pb
+5. Drag mouse to pc2
+6. Mouse pointer up
+
+**Example:**
+```json
 {
   "type": "createBezier",
   "data": {
     "shapeID": "bezier_b43f45965d324",
     "shapeData": {
-    "type": "bezier",
-    "pa": {
-      "x": 149.69140625,
-      "y": 139.078125
-    },
-    "pc1": {
-      "x": 149.69140625,
-      "y": 341.19921875
-    },
-    "pc2": {
-      "x": 592.01953125,
-      "y": 153.4453125
-    },
-    "pb": {
-      "x": 501.0625,
-      "y": 36.7890625
-    }
+      "type": "bezier",
+      "pa": { "x": 149.69140625, "y": 139.078125 },
+      "pc1": { "x": 149.69140625, "y": 341.19921875 },
+      "pc2": { "x": 592.01953125, "y": 153.4453125 },
+      "pb": { "x": 501.0625, "y": 36.7890625 }
     }
   },
-  "actionID": "action_ff3b86006a5f58"
+  "actionID": "action_ff3b86006a5f58",
+  "timestamp": 1709481235890
 }
-purpose: draw a bezier curve with anchor points pa and pb and control points pc1 and pc2
-user behavior: mouse pointer down at pa, drag mouse to pc1, mouse pointer up, drag mouse to pb, mouse pointer down, drag mouse to pc2, mouse pointer up
+```
 
-function name: moveShapes
-example recorded action data:
+---
+
+### moveShapes
+**Purpose:** Translate one or more selected shapes by a position delta
+
+**User behavior:**
+- Mouse pointer down on selected shape
+- Drag mouse (translates all selected shapes together)
+- Mouse pointer up
+- If multiple shapes selected, they all move as a group
+
+**Example:**
+```json
 {
   "type": "moveShapes",
   "data": {
-    "shapeIDs": [
-    "bezier_3670d5c0f11378"
-    ],
+    "shapeIDs": ["bezier_3670d5c0f11378"],
     "shapeData": [
-    {
-      "type": "bezier",
-      "pa": {
-      "x": 210.23046875,
-      "y": 219.7265625
-      },
-      "pc1": {
-      "x": 228.76171875,
-      "y": 383.33984375
-      },
-      "pc2": {
-      "x": 603.8203125,
-      "y": 417.109375
-      },
-      "pb": {
-      "x": 446.01171875,
-      "y": 206.5546875
+      {
+        "type": "bezier",
+        "pa": { "x": 210.23046875, "y": 219.7265625 },
+        "pc1": { "x": 228.76171875, "y": 383.33984375 },
+        "pc2": { "x": 603.8203125, "y": 417.109375 },
+        "pb": { "x": 446.01171875, "y": 206.5546875 }
       }
-    }
     ],
-    "posDelta": {
-    "x": 41.93359375,
-    "y": 102.8515625
-    }
+    "posDelta": { "x": 41.93359375, "y": 102.8515625 }
   },
-  "actionID": "action_12e898a2223498"
+  "actionID": "action_12e898a2223498",
+  "timestamp": 1709481237123
 }
-purpose: translate the selected shapes by posDelta.x and posDelta.y. shapeData is a list of the shape data of all the selected shapes before translation.
-user behavior: mouse pointer down at pb, drag mouse mouse to pb, mouse pointer up
+```
 
-function name: moveHandle
-example recorded action data:
+**Note:** `shapeData` contains the shape state BEFORE the move. Apply `posDelta` to get final positions.
+
+---
+
+### moveHandle
+**Purpose:** Move a specific handle (anchor or control point) of a shape
+
+**User behavior:**
+- Mouse pointer down on handle at startPos
+- Drag handle to new position
+- Mouse pointer up at endPos
+
+**Handles by shape type:**
+- Line: `a` and `b` (both anchor points)
+- Bezier: `a` and `b` (anchor points), `c1` and `c2` (control points)
+
+**Example:**
+```json
 {
   "type": "moveHandle",
   "data": {
     "shapeID": "line_401b2c02f98408",
     "shapeData": {
-    "type": "line",
-    "pa": {
-      "x": 294.10546875,
-      "y": 516.92578125
-    },
-    "pb": {
-      "x": 442.8828125,
-      "y": 475.74609375
-    }
+      "type": "line",
+      "pa": { "x": 294.10546875, "y": 516.92578125 },
+      "pb": { "x": 442.8828125, "y": 475.74609375 }
     },
     "dataRole": "a",
-    "startPos": {
-    "x": 257.8359375,
-    "y": 319.32421875
-    },
-    "endPos": {
-    "x": 294.10546875,
-    "y": 516.92578125
-    }
+    "startPos": { "x": 257.8359375, "y": 319.32421875 },
+    "endPos": { "x": 294.10546875, "y": 516.92578125 }
   },
-  "actionID": "action_a64c4de63d1b6"
+  "actionID": "action_a64c4de63d1b6",
+  "timestamp": 1709481238456
 }
-purpose: translate the selected handle of a shape from startPos to endPos. A line has two handles: pa and pb. A bezier curve has four handles: pa, pb, pc1, and pc2.
-user behavior: mouse pointer down at startPos, drag mouse to pb, mouse pointer up
+```
 
-function name: selectWithMarquee
-example recorded action data:
+**Note:** `shapeData` shows the shape state AFTER the handle move. The `dataRole` field indicates which handle was moved.
+
+---
+
+### selectWithMarquee
+**Purpose:** Select all shapes that intersect with a rectangular marquee region
+
+**User behavior:**
+- Mouse pointer down at (rect.x, rect.y) on empty canvas
+- Drag mouse to create selection rectangle
+- Mouse pointer up
+- All shapes intersecting the rectangle become selected
+
+**Example:**
+```json
 {
   "type": "selectWithMarquee",
   "data": {
@@ -140,29 +237,146 @@ example recorded action data:
       "width": 148.1484375,
       "height": 161.50390625
     },
-    "shapeIDs": [
-      "line_f99ac50d71bb9"
-    ],
+    "shapeIDs": ["line_f99ac50d71bb9"],
     "shapeData": [
       {
         "type": "line",
-        "pa": {
-          "x": 161.78515625,
-          "y": 95.375
-        },
-        "pb": {
-          "x": 257.6484375,
-          "y": 189.1796875
-        }
+        "pa": { "x": 161.78515625, "y": 95.375 },
+        "pb": { "x": 257.6484375, "y": 189.1796875 }
       }
     ]
-  }
+  },
+  "timestamp": 1709481239789
 }
-purpose: select the objects that intersect with the rectangle marquee defined by top left corner at rect.x, rect.y, width = rect.with, and height = rect.height. shapeData is a list of all the vector objects that have been selected by the marquee.
-user behavior: mouse pointer down at rect.x, rect.y, mouse drag to rect.x + rect.width, rect.y + rect.height, pointer up
+```
 
-function: undo
-example recorded action data:
+**Note:** `shapeData` is the list of all shapes selected by this marquee operation.
+
+---
+
+### select
+**Purpose:** Add a single shape to the current selection
+
+**User behavior:**
+- Click on a shape while holding Shift key (additive selection)
+- OR click on a shape when nothing else is selected
+
+**Example:**
+```json
+{
+  "type": "select",
+  "data": {
+    "shapeID": "line_abc123",
+    "shapeData": {
+      "type": "line",
+      "pa": { "x": 100, "y": 100 },
+      "pb": { "x": 200, "y": 200 }
+    }
+  },
+  "timestamp": 1709481240123
+}
+```
+
+---
+
+### deselect
+**Purpose:** Remove a single shape from the current selection
+
+**User behavior:**
+- Shift+click on an already selected shape to deselect it
+
+**Example:**
+```json
+{
+  "type": "deselect",
+  "data": {
+    "shapeID": "line_abc123",
+    "shapeData": {
+      "type": "line",
+      "pa": { "x": 100, "y": 100 },
+      "pb": { "x": 200, "y": 200 }
+    }
+  },
+  "timestamp": 1709481241456
+}
+```
+
+---
+
+### copyPasteShapes
+**Purpose:** Duplicate selected shapes and paste them at an offset location
+
+**User behavior:**
+- Select one or more shapes
+- Press Cmd+C (or Ctrl+C) to copy
+- Press Cmd+V (or Ctrl+V) to paste
+- Pasted shapes appear offset from originals
+
+**Example:**
+```json
+{
+  "type": "copyPasteShapes",
+  "data": {
+    "shapeIDs": ["bezier_7362d12b86e528"],
+    "shapeData": [
+      {
+        "type": "bezier",
+        "pa": { "x": 208.9140625, "y": 274.109375 },
+        "pc1": { "x": 208.9140625, "y": 435.16015625 },
+        "pc2": { "x": 481.96484375, "y": 268.67578125 },
+        "pb": { "x": 306.6796875, "y": 262.3671875 }
+      }
+    ],
+    "originalShapeIDs": ["bezier_7bfb95fb5b34c"],
+    "offset": { "x": 30, "y": 30 }
+  },
+  "actionID": "action_30c4b0d403596",
+  "timestamp": 1709481242789
+}
+```
+
+**Note:** `originalShapeIDs` links back to the shapes that were copied. `shapeData` contains the final positions (after offset applied).
+
+---
+
+### deleteShapes
+**Purpose:** Delete one or more selected shapes
+
+**User behavior:**
+- Select one or more shapes
+- Press Backspace key
+
+**Example:**
+```json
+{
+  "type": "deleteShapes",
+  "data": {
+    "shapeData": {
+      "line_abc123": {
+        "type": "line",
+        "pa": { "x": 100, "y": 100 },
+        "pb": { "x": 200, "y": 200 }
+      }
+    }
+  },
+  "undo": "[function]",
+  "actionID": "action_xyz789",
+  "timestamp": 1709481243123
+}
+```
+
+**Note:** `shapeData` is a Map/Object with shapeID as keys, containing the deleted shapes for potential restoration.
+
+---
+
+### undo
+**Purpose:** Reverse the effect of a previously committed action
+
+**User behavior:**
+- Press Cmd+Z (or Ctrl+Z)
+
+**Example:**
+```json
 {
   "type": "undo",
   "data": {
@@ -172,61 +386,149 @@ example recorded action data:
         "shapeID": "line_64b4ec9242bf",
         "shapeData": {
           "type": "line",
-          "pa": {
-            "x": 193.73828125,
-            "y": 143.13671875
-          },
-          "pb": {
-            "x": 271.57421875,
-            "y": 182.94140625
-          }
+          "pa": { "x": 193.73828125, "y": 143.13671875 },
+          "pb": { "x": 271.57421875, "y": 182.94140625 }
         }
       },
       "actionID": "action_5eede44084661"
     }
-  }
-}
-purpose: undo the effect of the action whose record is stored in data.action. This action being undone has actionID = data.actionID and occurs earlier in the observed action sequence.
-user behavior: keyboard press command and z
-
-function: copyPasteShapes
-example recorded action data:
-{
-  "type": "copyPasteShapes",
-  "data": {
-    "shapeIDs": [
-      "bezier_7362d12b86e528"
-    ],
-    "shapeData": [
-      {
-        "type": "bezier",
-        "pa": {
-          "x": 208.9140625,
-          "y": 274.109375
-        },
-        "pc1": {
-          "x": 208.9140625,
-          "y": 435.16015625
-        },
-        "pc2": {
-          "x": 481.96484375,
-          "y": 268.67578125
-        },
-        "pb": {
-          "x": 306.6796875,
-          "y": 262.3671875
-        }
-      }
-    ],
-    "originalShapeIDs": [
-      "bezier_7bfb95fb5b34c"
-    ],
-    "offset": {
-      "x": 30,
-      "y": 30
-    }
   },
-  "actionID": "action_30c4b0d403596"
+  "timestamp": 1709481244456
 }
-purpose: copy and paste all shapes inside data.shapeData offset from their original locations by data.offset.x, data.offset.y
-user behavior: keyboard press command and c then command and v
+```
+
+**Note:** The `data.action` field contains the complete action record being undone, including its original `actionID`. This allows you to trace which action was reversed.
+
+---
+
+## ADDITIONAL CONTEXT
+
+### User Interface Capabilities
+
+**Available Tools:**
+- **Select tool** - Click to select shapes, drag to move them, marquee select by dragging on empty space
+- **Line tool** - Click-drag to create straight lines (Shift key constrains to axis-aligned)
+- **Bezier tool** - Multi-step process to create cubic Bezier curves
+
+**Keyboard Shortcuts:**
+- `Cmd/Ctrl + E` - Switch to Select tool
+- `Cmd/Ctrl + C` - Copy selected shapes
+- `Cmd/Ctrl + V` - Paste copied shapes (30px offset from original)
+- `Cmd/Ctrl + Z` - Undo last action
+- `Backspace` - Delete selected shapes
+- `Escape` - Cancel current draft (not logged in current implementation)
+- `Shift + drag` - Constrain line to horizontal/vertical axes
+
+### Coordinate System
+- SVG coordinate space (origin at top-left)
+- Coordinates are in SVG user units
+- Y-axis increases downward
+
+### Shape Data Structures
+
+**Line:**
+```json
+{
+  "type": "line",
+  "pa": { "x": number, "y": number },  // anchor point A
+  "pb": { "x": number, "y": number }   // anchor point B
+}
+```
+
+**Bezier:**
+```json
+{
+  "type": "bezier",
+  "pa": { "x": number, "y": number },   // anchor point A (start)
+  "pc1": { "x": number, "y": number },  // control point 1 (affects curve at A)
+  "pc2": { "x": number, "y": number },  // control point 2 (affects curve at B)
+  "pb": { "x": number, "y": number }    // anchor point B (end)
+}
+```
+
+---
+
+## ANALYSIS TIPS
+
+### Geometric Analysis Helpers
+
+**Calculate distance between points:**
+```
+distance = sqrt((x2-x1)² + (y2-y1)²)
+```
+
+**Detect axis alignment:**
+```
+Horizontal: abs(y2 - y1) < threshold (e.g., 5 pixels)
+Vertical: abs(x2 - x1) < threshold
+```
+
+**Detect grid snapping:**
+```
+Check if coordinates are near multiples of common grid values (e.g., 10, 25, 50)
+```
+
+**Calculate angle:**
+```
+angle = atan2(y2-y1, x2-x1) * 180/PI
+```
+
+### Workflow Analysis
+
+**Measure action density:**
+```
+actions_per_second = count / (last_timestamp - first_timestamp) * 1000
+```
+
+**Identify action clusters:**
+```
+Group actions with <1 second gaps between them
+```
+
+**Calculate edit/create ratio:**
+```
+edit_actions = moveShapes + moveHandle + deleteShapes + undo
+create_actions = createLine + createBezier + copyPasteShapes
+ratio = edit_actions / create_actions
+
+High ratio suggests users struggle with initial placement
+```
+
+---
+
+## COMMON ABSTRACTION OPPORTUNITIES
+
+When analyzing logs, consider suggesting these abstraction types:
+
+1. **Compound tools** - Combine multiple primitives (e.g., rectangle tool = 4 lines + group)
+2. **Constraint systems** - Snap-to-grid, angle constraints, alignment guides
+3. **Smart handles** - Symmetric bezier handles, locked tangents, mirrored controls
+4. **Batch operations** - Distribute spacing, align to edge, array duplication
+5. **Modifiers** - Keyboard modifiers for tool variants (Shift for constrain, Alt for duplicate)
+6. **Gesture shortcuts** - Double-click behaviors, right-click menus
+7. **Parametric tools** - Circle by center+radius, rectangle by corner+dimensions
+8. **Copy behavior improvements** - Paste-in-place, paste with specific offset, paste and repeat
+
+---
+
+## OUTPUT STRUCTURE
+
+Structure your analysis report as follows:
+
+### 1. Session Summary
+- Total actions
+- Duration
+- Action types breakdown
+- Shapes created
+
+### 2. Identified Patterns
+For each pattern, use the format specified in "Expected Output Format" above.
+
+### 3. Priority Recommendations
+Rank suggestions by:
+- Frequency of pattern occurrence
+- Potential time savings
+- Implementation complexity (prefer high-impact, low-complexity)
+
+### 4. Additional Observations
+Any other insights about user behavior, workflow, or potential improvements.
