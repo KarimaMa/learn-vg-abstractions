@@ -183,6 +183,10 @@
   // Keep everything in a simple registry
   const model = new Map(); // shapeId -> { type, ... }
 
+  // Session tracking
+  const sessionID = newId("session");
+  const sessionStartTime = Date.now();
+
   let tool = "line"; // "select" | "line" | "bezier"
   let draft = null;  // current in-progress shape info
   let selectedIds = new Set();
@@ -225,11 +229,13 @@
 
   function logAction(cmd) {
     // used for logging actions that we don't want to add to the commit stream
+    cmd.timestamp = Date.now();
     log.push(cmd);
   }
 
   function commitAction(cmd) {
     cmd.actionID = newId("action")
+    cmd.timestamp = Date.now();
     // cmd object example: { type: "createBezier", data: shape, undo: shape.undo}
     history.push(cmd);
     log.push(cmd);
@@ -254,13 +260,32 @@
   function activateSelectTool() {
     tool = "select";
     setBtnActive("toolSelect");
+    logAction({ type: "switchTool", data: { tool: "select" } });
   }
 
   document.getElementById("toolSelect").addEventListener("click", activateSelectTool );
-  document.getElementById("toolLine").addEventListener("click",   () => { tool = "line";   setBtnActive("toolLine"); shapeToCopy = null; });
-  document.getElementById("toolBezier").addEventListener("click", () => { tool = "bezier"; setBtnActive("toolBezier"); shapeToCopy = null; });
+  document.getElementById("toolLine").addEventListener("click",   () => {
+    tool = "line";
+    setBtnActive("toolLine");
+    shapeToCopy = null;
+    logAction({ type: "switchTool", data: { tool: "line" } });
+  });
+  document.getElementById("toolBezier").addEventListener("click", () => {
+    tool = "bezier";
+    setBtnActive("toolBezier");
+    shapeToCopy = null;
+    logAction({ type: "switchTool", data: { tool: "bezier" } });
+  });
   document.getElementById("toolExportLog").addEventListener("click", async () => {
-      const data = JSON.stringify(log, null, 2);
+      const exportData = {
+        sessionID,
+        sessionStartTime,
+        sessionEndTime: Date.now(),
+        sessionDuration: Date.now() - sessionStartTime,
+        actionCount: log.length,
+        log
+      };
+      const data = JSON.stringify(exportData, null, 2);
       if (window.showSaveFilePicker) {
         try {
           const handle = await showSaveFilePicker({
@@ -530,14 +555,14 @@
 
   function copyShapeData(shape) {
     if (shape.type === "line") {
-      const pa = getCircleElementCenter(shape.a);
-      const pb = getCircleElementCenter(shape.b);
+      const pa = shape.a ? getCircleElementCenter(shape.a) : null;
+      const pb = shape.b ? getCircleElementCenter(shape.b) : null;
       return {type: "line", pa, pb};
     } else if (shape.type === "bezier") {
-      const pa = getCircleElementCenter(shape.a);
-      const pb = getCircleElementCenter(shape.b);
-      const pc1 = getCircleElementCenter(shape.c1);
-      const pc2 = getCircleElementCenter(shape.c2);
+      const pa = shape.a ? getCircleElementCenter(shape.a) : null;
+      const pb = shape.b ? getCircleElementCenter(shape.b) : null;
+      const pc1 = shape.c1 ? getCircleElementCenter(shape.c1) : null;
+      const pc2 = shape.c2 ? getCircleElementCenter(shape.c2) : null;
       return {type: "bezier", pa, pc1, pc2, pb};
     }
   }
@@ -971,6 +996,8 @@
       // Remove the draft shape entirely
       const shape = model.get(draft.id);
       if (shape) {
+        const shapeData = copyShapeData(shape);
+        logAction({ type: "cancelDraft", data: { tool: draft.tool, step: draft.step, shapeData } });
         shape.undo({id: draft.id});
       }
     }
